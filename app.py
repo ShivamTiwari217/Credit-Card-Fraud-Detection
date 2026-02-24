@@ -1,5 +1,5 @@
 import streamlit as st
-import pickle
+import joblib
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -12,24 +12,28 @@ from sklearn.metrics import (
 
 st.set_page_config(page_title="Fraud Detection App", layout="wide")
 
-# Load model & scaler
-model = pickle.load(open("model.pkl", "rb"))
-scaler = pickle.load(open("scaler.pkl", "rb"))
+# ── Load model, scaler & threshold from the single combined file ──────────────
+@st.cache_resource
+def load_model():
+    data = joblib.load("fraud_model.pkl")
+    return data["model"], data["scaler"], data["threshold"]
+
+model, scaler, saved_threshold = load_model()
 
 st.title("💳 Credit Card Fraud Detection")
 st.markdown("ML-powered fraud detection with adjustable risk threshold")
 
-# Sidebar threshold slider
+# ── Sidebar threshold slider ───────────────────────────────────────────────────
 st.sidebar.header("Model Settings")
 threshold = st.sidebar.slider(
     "Classification Threshold",
     min_value=0.0,
     max_value=1.0,
-    value=0.5,
+    value=float(saved_threshold),   # pre-filled with the tuned threshold from training
     step=0.01
 )
-
 st.sidebar.markdown(f"Current Threshold: **{threshold}**")
+st.sidebar.caption(f"Tuned threshold from training: `{saved_threshold:.4f}`")
 
 # ==========================
 # 1. Manual Prediction Section
@@ -42,14 +46,13 @@ for i in range(30):  # Adjust if feature count differs
     features.append(value)
 
 if st.button("Predict Transaction"):
-    features = np.array(features).reshape(1, -1)
-    features_scaled = scaler.transform(features)
+    features_arr = np.array(features).reshape(1, -1)
+    features_scaled = scaler.transform(features_arr)
 
     probability = model.predict_proba(features_scaled)[0][1]
     prediction = 1 if probability >= threshold else 0
 
     st.subheader("Prediction Result")
-
     st.write(f"Fraud Probability: **{probability:.4f}**")
 
     if prediction == 1:
@@ -76,12 +79,14 @@ if uploaded_file is not None:
 
     st.dataframe(data.head())
 
+    fraud_count = predictions.sum()
+    st.markdown(f"**{fraud_count} fraudulent** transactions detected out of {len(predictions)} total.")
+
 # ==========================
 # 3. Model Performance Section
 # ==========================
 st.header("📊 Model Performance")
 
-# Optional: Load test data if available
 try:
     X_test = pd.read_csv("X_test.csv")
     y_test = pd.read_csv("y_test.csv").values.ravel()
@@ -96,29 +101,28 @@ try:
     with col1:
         cm = confusion_matrix(y_test, y_pred)
         fig, ax = plt.subplots()
-        ax.matshow(cm)
+        ax.matshow(cm, cmap="Blues")
         plt.title("Confusion Matrix")
         plt.xlabel("Predicted")
         plt.ylabel("Actual")
-
         for (i, j), val in np.ndenumerate(cm):
-            ax.text(j, i, f"{val}", ha="center", va="center")
-
+            ax.text(j, i, f"{val}", ha="center", va="center", color="black")
         st.pyplot(fig)
 
     # ROC Curve
     with col2:
         fpr, tpr, _ = roc_curve(y_test, y_probs)
         roc_auc = auc(fpr, tpr)
-
         fig2, ax2 = plt.subplots()
-        ax2.plot(fpr, tpr)
-        ax2.plot([0, 1], [0, 1], linestyle="--")
+        ax2.plot(fpr, tpr, label=f"AUC = {roc_auc:.4f}")
+        ax2.plot([0, 1], [0, 1], linestyle="--", color="grey")
         ax2.set_title(f"ROC Curve (AUC = {roc_auc:.4f})")
         ax2.set_xlabel("False Positive Rate")
         ax2.set_ylabel("True Positive Rate")
-
+        ax2.legend()
         st.pyplot(fig2)
 
-except:
+except FileNotFoundError:
     st.info("Upload X_test.csv and y_test.csv to enable performance metrics.")
+except Exception as e:
+    st.warning(f"Could not load performance metrics: {e}")
